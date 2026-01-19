@@ -15,6 +15,7 @@ Key Components:
 
 import time
 import wgpu
+import numpy as np
 from rendercanvas.auto import RenderCanvas, loop
 from brain_renderer import BrainRenderer
 from camera import Camera
@@ -72,6 +73,10 @@ if "labels" in brain_data and "region_names" in brain_data:
         region_names=brain_data["region_names"]
     )
 
+# Setup Text Renderer
+from text_renderer import TextRenderer
+text_renderer = TextRenderer(device, render_format)
+
 def draw():
     """
     Main render callback function.
@@ -119,21 +124,46 @@ def draw():
         import pyrr
         projection_matrix = pyrr.matrix44.create_perspective_projection_matrix(45, aspect, 0.1, 1000.0)
         
+        # Correction Matrix (Match BrainRenderer)
+        correction = np.array([
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 0.5, 0.0],
+            [0.0, 0.0, 0.5, 1.0],
+        ], dtype=np.float32)
+        
+        # MVP construction (Model is Identity)
+        # Order: View @ (Proj @ Correction)
+        # Note: BrainRenderer uses np.matmul(view, np.matmul(projection, correction))
+        # Ensure we match EXACTLY.
+        mvp_matrix = np.matmul(view_matrix, np.matmul(projection_matrix, correction))
+        
         if interaction and camera._input_state.get("last_mouse_pos"):
              mx, my = camera._input_state["last_mouse_pos"]
-             # Normalize to NDC [-1, 1]
-             # Screen coords: 0,0 top-left (usually in wgpu events) or bottom-left? 
-             # wgpu-py events are usually top-left.
-             # NDC: -1,-1 is bottom-left.
-             w, h = size[0], size[1]
-             ndc_x = (mx / w) * 2.0 - 1.0
-             ndc_y = -((my / h) * 2.0 - 1.0) # Invert Y
              
-             region = interaction.get_region_at_mouse(ndc_x, ndc_y, view_matrix, projection_matrix)
-             if region:
-                 canvas.set_title(f"Brain Viewer - Region: {region}")
+             # Calculate NDC using Logical Size
+             # wgpu-py events use logical pixels. RenderCanvas handles specific backend logic.
+             # On Retina: Texture is 2x Logical.
+             # We should use logical size for normalization.
+             l_w, l_h = canvas.get_logical_size()
+             
+             ndc_x = (mx / l_w) * 2.0 - 1.0
+             ndc_y = -((my / l_h) * 2.0 - 1.0) # Invert Y
+             
+             # DEBUG: Print coords periodically (e.g. every 100 frames or just always for now)
+             # print(f"Mouse: ({mx:.1f}, {my:.1f}) | Logical: ({l_w}, {l_h}) | NDC: ({ndc_x:.2f}, {ndc_y:.2f})")
+             
+             # Get Region Name and ID
+             region_name, region_id = interaction.get_region_at_mouse(ndc_x, ndc_y, mvp_matrix)
+             
+             if region_name:
+                 canvas.set_title(f"Brain Viewer - Region: {region_name}")
+                 text_renderer.set_text(f"Region: {region_name}")
+                 renderer.set_hovered_id(region_id)
              else:
                  canvas.set_title("Brain Viewer")
+                 text_renderer.set_text("")
+                 renderer.set_hovered_id(-1.0)
         
         # 3D Render Pass
         renderer.draw(current_view, aspect, view_matrix, camera_pos=camera.position)
@@ -141,6 +171,9 @@ def draw():
         # 2D Overlay Pass (Butterfly Plot)
         if show_traces:
             trace_renderer.draw(current_view, frame_idx)
+            
+        # Text Overlay Pass
+        text_renderer.draw(current_view)
         
     except Exception as e:
         print(f"Draw Loop Error: {e}")

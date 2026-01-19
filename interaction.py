@@ -30,43 +30,42 @@ class BrainInteraction:
         self.labels = labels
         self.region_names = region_names
 
-    def get_region_at_mouse(self, mouse_norm_x, mouse_norm_y, view_matrix, projection_matrix):
+    def get_region_at_mouse(self, mouse_norm_x, mouse_norm_y, mvp_matrix):
         """
         Find the brain region under the given normalized mouse coordinates.
         
         Args:
             mouse_norm_x (float): Mouse X in NDC [-1, 1].
             mouse_norm_y (float): Mouse Y in NDC [-1, 1].
-            view_matrix (np.ndarray): 4x4 View Matrix.
-            projection_matrix (np.ndarray): 4x4 Projection Matrix.
+            mvp_matrix (np.ndarray): 4x4 Model-View-Projection Matrix.
             
         Returns:
-            str: Name of the region, or None if no intersection.
+            tuple: (Region Name, Region ID) or (None, -1).
         """
         # 1. Unproject mouse to World Ray
-        # NDC -> Clip -> View -> World
+        # Screen -> Clip -> World directly using MVP Inverse
         
-        # Inverse matrices
         try:
-            inv_proj = np.linalg.inv(projection_matrix)
-            inv_view = np.linalg.inv(view_matrix)
+            inv_mvp = np.linalg.inv(mvp_matrix)
         except np.linalg.LinAlgError:
-            return None
+            return None, -1
             
         # Ray Start (Near Plane) and End (Far Plane) in NDC
-        ray_start_ndc = np.array([mouse_norm_x, mouse_norm_y, -1.0, 1.0], dtype=np.float32)
+        # Z = 0.0 is Near for WebGPU (corrected)
+        # Z = 1.0 is Far
+        # We assume Row-Vector convention based on BrainRenderer logic:
+        # v_ndc = v_world @ MVP
+        # So v_world = v_ndc @ inv_MVP
+        
+        ray_start_ndc = np.array([mouse_norm_x, mouse_norm_y, 0.0, 1.0], dtype=np.float32)
         ray_end_ndc = np.array([mouse_norm_x, mouse_norm_y, 1.0, 1.0], dtype=np.float32)
         
-        # To View Space
-        ray_start_view = np.dot(inv_proj, ray_start_ndc)
-        ray_start_view /= ray_start_view[3]
+        # To World Space (Row Vector multiplication)
+        ray_start_world_h = np.dot(ray_start_ndc, inv_mvp)
+        ray_start_world = ray_start_world_h[:3] / ray_start_world_h[3]
         
-        ray_end_view = np.dot(inv_proj, ray_end_ndc)
-        ray_end_view /= ray_end_view[3]
-        
-        # To World Space
-        ray_start_world = np.dot(inv_view, ray_start_view)
-        ray_end_world = np.dot(inv_view, ray_end_view)
+        ray_end_world_h = np.dot(ray_end_ndc, inv_mvp)
+        ray_end_world = ray_end_world_h[:3] / ray_end_world_h[3]
         
         origin = ray_start_world[:3]
         direction = ray_end_world[:3] - origin
@@ -81,7 +80,7 @@ class BrainInteraction:
         )
         
         if len(index_tri) == 0:
-            return None
+            return None, -1
             
         # 3. Find closest hit
         # locations is (N_hits, 3). We want the closest one to origin.
@@ -107,6 +106,6 @@ class BrainInteraction:
         
         # 5. Get Name
         if 0 <= label_id < len(self.region_names):
-            return self.region_names[label_id]
+            return self.region_names[label_id], label_id
         
-        return "Unknown"
+        return "Unknown", -1

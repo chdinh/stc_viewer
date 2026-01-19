@@ -53,6 +53,7 @@ class BrainRenderer:
         self.uniform_buffer = self.device.create_buffer(size=self.uniform_data.nbytes, usage=wgpu.BufferUsage.UNIFORM | wgpu.BufferUsage.COPY_DST)
         
         self.visualization_mode = 0.0 # 0.0 = Electric, 1.0 = Atlas
+        self.hovered_id = -1.0
         
         # Pipeline setup
         self._init_pipeline()
@@ -67,6 +68,10 @@ class BrainRenderer:
             mode (float): 0.0 for Electric/Holographic, 1.0 for Solid Atlas.
         """
         self.visualization_mode = mode
+
+    def set_hovered_id(self, region_id):
+        """Set the ID of the region to highlight."""
+        self.hovered_id = float(region_id)
 
     def set_data(self, data):
         """Update geometry data completely."""
@@ -97,11 +102,17 @@ class BrainRenderer:
             curvature = data["curvature"].astype(np.float32).reshape(-1, 1)
         else:
             curvature = np.ones((len(vertices), 1), dtype=np.float32) * 0.5
+            
+        # Labels (N,) -> (N, 1)
+        if "labels" in data:
+            labels = data["labels"].astype(np.float32).reshape(-1, 1)
+        else:
+            labels = np.ones((len(vertices), 1), dtype=np.float32) * -1.0
 
         self.n_indices = len(faces) * 3
         
-        # Interleave: Pos(3) + Norm(3) + Color(3) + Curve(1) = 10 floats per vertex
-        vertex_data = np.hstack([vertices, vertex_normals, colors, curvature]).flatten().astype(np.float32)
+        # Interleave: Pos(3) + Norm(3) + Color(3) + Curve(1) + Label(1) = 11 floats per vertex
+        vertex_data = np.hstack([vertices, vertex_normals, colors, curvature, labels]).flatten().astype(np.float32)
         index_data = faces.flatten().astype(np.uint32)
 
         self.vbo = self.device.create_buffer_with_data(data=vertex_data, usage=wgpu.BufferUsage.VERTEX | wgpu.BufferUsage.COPY_DST)
@@ -111,6 +122,7 @@ class BrainRenderer:
         self.vertices_stored = vertices
         self.normals_stored = vertex_normals
         self.curvature_stored = curvature
+        self.labels_stored = labels
 
     def update_colors(self, new_colors):
         """
@@ -121,8 +133,8 @@ class BrainRenderer:
         """
         # new_colors: (N, 3)
         # Re-interleave data
-        # Pos(3) + Norm(3) + Color(3) + Curve(1)
-        vertex_data = np.hstack([self.vertices_stored, self.normals_stored, new_colors, self.curvature_stored]).flatten().astype(np.float32)
+        # Pos(3) + Norm(3) + Color(3) + Curve(1) + Label(1)
+        vertex_data = np.hstack([self.vertices_stored, self.normals_stored, new_colors, self.curvature_stored, self.labels_stored]).flatten().astype(np.float32)
         self.device.queue.write_buffer(self.vbo, 0, vertex_data)
 
     def _init_pipeline(self):
@@ -161,13 +173,14 @@ class BrainRenderer:
             "entry_point": "vs_main",
             "buffers": [
                 {
-                    "array_stride": 10 * 4, # Pos(3)+Norm(3)+Color(3)+Curve(1)
+                    "array_stride": 11 * 4, # Pos(3)+Norm(3)+Color(3)+Curve(1)+Label(1)
                     "step_mode": "vertex",
                     "attributes": [
                         {"format": "float32x3", "offset": 0, "shader_location": 0},   # pos
                         {"format": "float32x3", "offset": 3 * 4, "shader_location": 1}, # norm
                         {"format": "float32x3", "offset": 6 * 4, "shader_location": 2}, # color
-                        {"format": "float32",   "offset": 9 * 4, "shader_location": 3}  # curvature
+                        {"format": "float32",   "offset": 9 * 4, "shader_location": 3},  # curvature
+                        {"format": "float32",   "offset": 10 * 4, "shader_location": 4}  # label
                     ]
                 }
             ]
@@ -304,7 +317,7 @@ class BrainRenderer:
         ld_norm = ld / np.linalg.norm(ld)
 
         # Params (Viz Mode)
-        params = np.array([self.visualization_mode, 0.0, 0.0, 0.0], dtype=np.float32)
+        params = np.array([self.visualization_mode, self.hovered_id, 0.0, 0.0], dtype=np.float32)
 
         combined_uniforms = np.concatenate([mvp_flat, model_flat, cp, ld_norm, params])
         self.device.queue.write_buffer(self.uniform_buffer, 0, combined_uniforms)

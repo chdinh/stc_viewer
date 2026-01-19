@@ -17,8 +17,9 @@
 struct VertexInput {
     @location(0) position: vec3<f32>,  // Model Space Position
     @location(1) normal: vec3<f32>,    // Model Space Normal
-    @location(2) color: vec3<f32>,     // Per-vertex Color (activations encoded here)
+    @location(2) color: vec3<f32>,     // Per-vertex Color
     @location(3) curvature: f32,       // Normalized Curvature [0..1]
+    @location(4) region_id: f32,       // Region ID
 };
 
 struct VertexOutput {
@@ -27,6 +28,7 @@ struct VertexOutput {
     @location(1) view_dir: vec3<f32>,                  // View Direction vector
     @location(2) color: vec3<f32>,                     // Pass-through interpolated color
     @location(3) curvature: f32,                       // Pass-through curvature
+    @location(4) region_id: f32,                       // Pass-through Region ID
 };
 
 struct Uniforms {
@@ -35,6 +37,7 @@ struct Uniforms {
     camera_pos: vec4<f32>,              // Camera World Position (.xyz)
     light_dir: vec4<f32>,               // Light Direction Normalized (.xyz)
     params: vec4<f32>,                  // .x = visualization_mode (0=Electric, 1=Atlas)
+                                        // .y = hovered_id (-1 = None)
 };
 
 @group(0) @binding(0)
@@ -54,6 +57,8 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     
     out.color = in.color;
     out.curvature = in.curvature;
+    out.region_id = in.region_id;
+    
     return out;
 }
 
@@ -87,7 +92,14 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location
         let spec = pow(max(dot(N, H), 0.0), 32.0);
         let specular = vec3<f32>(0.2) * spec; // Low specular for matte look
         
-        let final_color = ambient + diffuse + specular;
+        var final_color = ambient + diffuse + specular;
+        
+        // --- HOVER HIGHLIGHT (Atlas Mode) ---
+        let hovered_id = uniforms.params.y;
+        if (hovered_id >= -0.5 && abs(in.region_id - hovered_id) < 0.2) {
+             let highlight = vec3<f32>(1.0, 1.0, 0.8) * 0.6; // Constant glow
+             final_color = final_color + highlight;
+        }
         
         // Opaque
         return vec4<f32>(final_color, 1.0);
@@ -160,8 +172,32 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location
     let emissive = mix(shell_emit, data_emit, is_data);
 
     // --- COMBINE ---
-    let final_color = diffuse_color + specular_color + rim_color + emissive;
+    var final_color = diffuse_color + specular_color + rim_color + emissive;
     
+    // --- HOVER HIGHLIGHT (Mode 1 Only usually, or both?) ---
+    // Let's allow it in both modes.
+    let hovered_id = uniforms.params.y;
+    // Check if this vertex belongs to the hovered region
+    // in.region_id is interpolated result. Since region IDs are integers, 
+    // we must check with a small epsilon.
+    // However, interpolation across triangle boundaries between different regions 
+    // might produce intermediate values.
+    // For atlas visualization, typically vertices at boundaries are duplicated or share ID?
+    // In our loader, we just pushed vertex labels.
+    // Vertices are shared -> Smooth shading -> Interpolated IDs?
+    // If vertices are shared between regions, one vertex has one ID.
+    // So the triangle will interpret from ID A to ID B.
+    // This might cause artifacts at borders.
+    // But let's try strict check logic:
+    
+    // If |ID - Hover| < 0.5
+    if (abs(in.region_id - hovered_id) < 0.2) {
+        // Apply Shiny Highlight
+        // Add strong rim light (White/Gold)
+        let highlight_rim = vec3<f32>(1.0, 1.0, 0.8) * fresnel * 3.0;
+        final_color = final_color + highlight_rim + vec3<f32>(0.2); // Add ambient boost
+    }
+
     // --- ALPHA / TRANSPARENCY ---
     // Shell: Original logic (Transparent center, opaque rim)
     let alpha_shell = clamp(0.1 + 0.85 * fresnel, 0.0, 1.0);
