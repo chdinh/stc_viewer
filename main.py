@@ -61,6 +61,17 @@ start_time = time.time()
 render_mode = "dynamic" 
 show_traces = True # Default On
 
+# Setup Interaction
+interaction = None
+if "labels" in brain_data and "region_names" in brain_data:
+    from interaction import BrainInteraction
+    interaction = BrainInteraction(
+        vertices=brain_data["vertices"], 
+        faces=brain_data["faces"], 
+        labels=brain_data["labels"], 
+        region_names=brain_data["region_names"]
+    )
+
 def draw():
     """
     Main render callback function.
@@ -103,6 +114,27 @@ def draw():
         # Camera Update
         view_matrix = camera.get_view_matrix()
         
+        # Store projection for interaction mapping
+        # Match renderer's projection
+        import pyrr
+        projection_matrix = pyrr.matrix44.create_perspective_projection_matrix(45, aspect, 0.1, 1000.0)
+        
+        if interaction and camera._input_state.get("last_mouse_pos"):
+             mx, my = camera._input_state["last_mouse_pos"]
+             # Normalize to NDC [-1, 1]
+             # Screen coords: 0,0 top-left (usually in wgpu events) or bottom-left? 
+             # wgpu-py events are usually top-left.
+             # NDC: -1,-1 is bottom-left.
+             w, h = size[0], size[1]
+             ndc_x = (mx / w) * 2.0 - 1.0
+             ndc_y = -((my / h) * 2.0 - 1.0) # Invert Y
+             
+             region = interaction.get_region_at_mouse(ndc_x, ndc_y, view_matrix, projection_matrix)
+             if region:
+                 canvas.set_title(f"Brain Viewer - Region: {region}")
+             else:
+                 canvas.set_title("Brain Viewer")
+        
         # 3D Render Pass
         renderer.draw(current_view, aspect, view_matrix, camera_pos=camera.position)
         
@@ -131,6 +163,10 @@ def handle_event(event):
     global render_mode, show_traces
     # Camera events
     camera.handle_event(event)
+
+    # Track mouse position locally for draw loop interaction
+    if event["event_type"] == "pointer_move":
+         camera._input_state["last_mouse_pos"] = (event["x"], event["y"])
     
     # Keyboard toggle
     if event["event_type"] == "key_down":
@@ -138,11 +174,13 @@ def handle_event(event):
             if render_mode == "dynamic":
                 render_mode = "atlas"
                 print("Switched to Surface Atlas Mode.")
+                renderer.set_visualization_mode(1.0) # Enable Atlas Shader Mode
                 if atlas_colors is not None:
                     renderer.update_colors(atlas_colors)
             else:
                 render_mode = "dynamic"
                 print("Switched to Dynamic Source Mode.")
+                renderer.set_visualization_mode(0.0) # Enable Electric/Holographic Mode
             canvas.request_draw()
             
         elif event["key"] == "p":

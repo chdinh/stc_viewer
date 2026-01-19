@@ -223,6 +223,30 @@ def load_brain_data():
     vertices -= centroid
     vertices *= scale
     
+    # Combined labels for raycasting
+    # Offset right hemisphere labels by max_left_label + 1 or just keep separate?
+    # Better: Keep a single array of (N,) ints, and a single list of names.
+    # Destrieux has distinct IDs for L/R usually? No, FreeSurfer usually reuses 0-75.
+    # We need to distinguish Left-Region vs Right-Region.
+    
+    # helper to process names
+    def decode_names(names_bytes, prefix):
+        return [f"{prefix}_{n.decode('utf-8')}" for n in names_bytes]
+
+    names_l = decode_names(nib.freesurfer.read_annot(left_annot_path)[2], "L")
+    names_r = decode_names(nib.freesurfer.read_annot(right_annot_path)[2], "R")
+    
+    # We need to remap Right IDs to avoid collision with Left IDs
+    offset = len(names_l)
+    map_right_shifted = map_right.copy()
+    # Only shift valid labels (>=0). -1 is valid in FS? usually unknown is 0 or -1. Destrieux: unknown is often 0.
+    # Let's shift everything >= 0
+    mask_r = map_right_shifted >= 0
+    map_right_shifted[mask_r] += offset
+    
+    combined_labels = np.concatenate([map_left, map_right_shifted])
+    combined_names = names_l + names_r
+    
     return {
         "vertices": vertices,
         "faces": faces,
@@ -231,7 +255,9 @@ def load_brain_data():
         "curvature": curvature,
         "color_frames": color_frames,
         "atlas_colors": atlas_colors,
-        "traces": all_traces
+        "traces": all_traces,
+        "labels": combined_labels,
+        "region_names": combined_names
     }
 
 if __name__ == "__main__":

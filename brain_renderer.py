@@ -48,13 +48,25 @@ class BrainRenderer:
             self._init_geometry(geometry_data)
         
         # Uniforms
-        self.uniform_data = np.zeros((40,), dtype=np.float32) # size=160 bytes (MVP+Model+CamPos+LightDir)
+        # Uniforms
+        self.uniform_data = np.zeros((44,), dtype=np.float32) # size=176 bytes (MVP+Model+CamPos+LightDir+Params)
         self.uniform_buffer = self.device.create_buffer(size=self.uniform_data.nbytes, usage=wgpu.BufferUsage.UNIFORM | wgpu.BufferUsage.COPY_DST)
+        
+        self.visualization_mode = 0.0 # 0.0 = Electric, 1.0 = Atlas
         
         # Pipeline setup
         self._init_pipeline()
         
         self.start_time = 0.0
+
+    def set_visualization_mode(self, mode):
+        """
+        Set the visualization mode.
+        
+        Args:
+            mode (float): 0.0 for Electric/Holographic, 1.0 for Solid Atlas.
+        """
+        self.visualization_mode = mode
 
     def set_data(self, data):
         """Update geometry data completely."""
@@ -291,7 +303,10 @@ class BrainRenderer:
         # Normalize in case of scaling (though rotation shouldn't scale)
         ld_norm = ld / np.linalg.norm(ld)
 
-        combined_uniforms = np.concatenate([mvp_flat, model_flat, cp, ld_norm])
+        # Params (Viz Mode)
+        params = np.array([self.visualization_mode, 0.0, 0.0, 0.0], dtype=np.float32)
+
+        combined_uniforms = np.concatenate([mvp_flat, model_flat, cp, ld_norm, params])
         self.device.queue.write_buffer(self.uniform_buffer, 0, combined_uniforms)
 
         # Depth Texture

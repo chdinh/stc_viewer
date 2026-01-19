@@ -34,6 +34,7 @@ struct Uniforms {
     model: mat4x4<f32>,                 // Model Matrix
     camera_pos: vec4<f32>,              // Camera World Position (.xyz)
     light_dir: vec4<f32>,               // Light Direction Normalized (.xyz)
+    params: vec4<f32>,                  // .x = visualization_mode (0=Electric, 1=Atlas)
 };
 
 @group(0) @binding(0)
@@ -65,7 +66,35 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location
     }
 
     let V = normalize(in.view_dir);
+    let L = normalize(uniforms.light_dir.xyz); 
+
+    // --- CHECK VISUALIZATION MODE ---
+    let mode = uniforms.params.x;
     
+    // --- MODE 1: ATLAS (Standard Rendering) ---
+    if (mode > 0.5) {
+        // Simple Phong shading to show true atlas colors
+        
+        // Ambient
+        let ambient = 0.3 * in.color;
+        
+        // Diffuse
+        let diff = max(dot(N, L), 0.0);
+        let diffuse = diff * in.color * 0.7;
+        
+        // Specular
+        let H = normalize(L + V);
+        let spec = pow(max(dot(N, H), 0.0), 32.0);
+        let specular = vec3<f32>(0.2) * spec; // Low specular for matte look
+        
+        let final_color = ambient + diffuse + specular;
+        
+        // Opaque
+        return vec4<f32>(final_color, 1.0);
+    }
+    
+    // --- MODE 0: ELECTRIC / HOLOGRAPHIC (Original) ---
+
     // --- DATA DETECTION (Saturation) ---
     // Gray (Background) has ~0 saturation. Activations/Atlas are colorful.
     // We use this to separate "Shell" logic from "Data" logic.
@@ -88,7 +117,6 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location
     let ao_strength = mix(0.1, 1.0, pow(in.curvature, 0.5)); 
     
     // --- 2. DIFFUSE ---
-    let L = normalize(uniforms.light_dir.xyz); 
     let diff = max(dot(N, L), 0.0);
     let diff_strength = mix(0.15, 0.05, is_data);
     let diffuse_color = base_color * diff * ao_strength * diff_strength;
