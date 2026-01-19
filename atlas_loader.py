@@ -9,6 +9,25 @@ import nibabel as nib
 
 
 def _load_hemisphere(mesh_path, labels, label_colors):
+    """
+    Load geometry and simulate time-series data for a single hemisphere.
+
+    Args:
+        mesh_path (str): File path to the .gii or freesurfer mesh file.
+        labels (np.ndarray): Atlas ROI labels for each vertex. Shape (N_verts,).
+        label_colors (np.ndarray): Color lookup table for the labels.
+
+    Returns:
+        tuple: A tuple containing:
+            - vertices (np.ndarray): Float32 positions (N, 3).
+            - faces (np.ndarray): Uint32 indices (M, 3).
+            - normals (np.ndarray): Float32 vertex normals (N, 3).
+            - vertex_colors (np.ndarray): Initial RGB colors (N, 3).
+            - curvature (np.ndarray): Normalized mean curvature 0..1 (N,).
+            - vertex_color_frames (np.ndarray): Pre-calculated animation frames (N, T, 3).
+            - atlas_colors (np.ndarray): RGB colors representing the atlas regions (N, 3).
+            - raw_traces (list): List of 1D arrays, each being the raw signal of an active cluster.
+    """
     print(f"Loading mesh from {mesh_path}...")
     if mesh_path.endswith('.gii') or mesh_path.endswith('.gii.gz'):
         gii = nib.load(mesh_path)
@@ -20,20 +39,11 @@ def _load_hemisphere(mesh_path, labels, label_colors):
     faces = faces.astype(np.uint32)
     coords = coords.astype(np.float32)
     
-    # labels is now passed in directly (numpy array)
-    # labels, ctab, names = nib.freesurfer.read_annot(annot_path)
-    
     # -------------------------------------------------------------
     # SIMULATION: Temporal Source Dynamics
     # -------------------------------------------------------------
     n_frames = 200
     time_series = np.zeros((len(labels), n_frames), dtype=np.float32)
-    
-    # Base Noise: REMOVED to prevent stray activations (glitches)
-    # The shader is very sensitive (threshold 0.05 saturation).
-    # Standard noise (std=0.05) was causing ~10% of vertices to glow.
-    # noise = np.random.normal(0.0, 0.05, (len(labels), n_frames))
-    # time_series += noise
     
     unique_labels = np.unique(labels)
     unique_labels = unique_labels[unique_labels > 0]
@@ -106,7 +116,12 @@ def _load_hemisphere(mesh_path, labels, label_colors):
     return vertices, faces, normals, vertex_colors, curvature, vertex_color_frames, atlas_colors, raw_traces
 
 def ensure_destrieux_downloaded():
-    """Manual download using curl to bypass Python SSL issues."""
+    """
+    Ensure the Destrieux atlas files are present locally.
+    
+    Uses `curl -k` (insecure mode) to bypass SSL verification issues with `nilearn` / `nitrc.org`.
+    Downloads files to `~/nilearn_data/destrieux_surface`.
+    """
     data_dir = os.path.expanduser("~/nilearn_data/destrieux_surface")
     if not os.path.exists(data_dir):
         os.makedirs(data_dir)
@@ -132,6 +147,24 @@ def ensure_destrieux_downloaded():
                 print(f"Failed to download {filename}")
 
 def load_brain_data():
+    """
+    Fetch surface geometry, load atlas annotations, and prepare simulation data.
+
+    This function coordinates the loading of left and right hemispheres (fsaverage5),
+    fetches the Destrieux atlas, simulates time-series activation for random clusters,
+    and merges everything into a centralized data dictionary.
+
+    Returns:
+        dict: A dictionary containing all necessary rendering data:
+            - 'vertices': (N, 3) float32 array of positions.
+            - 'faces': (M, 3) uint32 array of indices.
+            - 'normals': (N, 3) float32 array of vertex normals.
+            - 'colors': (N, 3) float32 array of initial colors.
+            - 'curvature': (N,) float32 array of curvature values.
+            - 'color_frames': (N, T, 3) float32 array of animated color frames.
+            - 'atlas_colors': (N, 3) float32 array of static atlas region colors.
+            - 'traces': List[np.ndarray] of raw time-series data for the butterfly plot.
+    """
     print("Fetching fsaverage5 surface...")
     fsaverage = datasets.fetch_surf_fsaverage("fsaverage5")
     

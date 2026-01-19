@@ -9,7 +9,32 @@ MESH_URL = "https://raw.githubusercontent.com/icemiliang/spherical_harmonic_maps
 MESH_FILENAME = "brain.obj"
 
 class BrainRenderer:
+    """
+    Core renderer for the 3D Brain visualization using WebGPU.
+
+    Implements a multi-pass rendering strategy to achieve high-quality transparency (Order Independent Transparency approximation).
+    It manages the geometry buffers (Vertex/Index), Unified shader bindings, and the draw calls for the brain mesh.
+
+    Attributes:
+        device (wgpu.GPUDevice): The WebGPU device.
+        canvas_context (wgpu.GPUCanvasContext): Context for the rendering surface.
+        shader_module (wgpu.GPUShaderModule): Compiled WGSL shader.
+        uniform_buffer (wgpu.GPUBuffer): Buffer backing the global uniforms.
+        vbo (wgpu.GPUBuffer): Vertex Buffer Object.
+        ibo (wgpu.GPUBuffer): Index Buffer Object.
+        pipeline_layout (wgpu.GPUPipelineLayout): Layout defining bind groups.
+        pipe_back_depth, pipe_back_color, pipe_front_depth, pipe_front_color (wgpu.RenderPipeline): Pipelines for the 4-pass render.
+    """
+
     def __init__(self, device, geometry_data, canvas_context=None):
+        """
+        Initialize the BrainRenderer.
+
+        Args:
+            device (wgpu.GPUDevice): The WebGPU device context.
+            geometry_data (dict): Dictionary containing keys 'vertices', 'normals', 'faces', 'colors'.
+            canvas_context (wgpu.GPUCanvasContext, optional): Canvas context. Defaults to None.
+        """
         self.device = device
         self.canvas_context = canvas_context
         
@@ -32,9 +57,23 @@ class BrainRenderer:
         self.start_time = 0.0
 
     def set_data(self, data):
+        """Update geometry data completely."""
         self._init_geometry(data)
 
     def _init_geometry(self, data):
+        """
+        Initialize Vertex and Index buffers from data dictionary.
+
+        Memory Layout per vertex (interleaved):
+        - Position: 3 floats (offset 0)
+        - Normal: 3 floats (offset 12)
+        - Color: 3 floats (offset 24)
+        - Curvature: 1 float (offset 36)
+        Total Stride: 40 bytes.
+
+        Args:
+            data (dict): Geometry data with keys 'vertices', 'normals', 'colors', 'faces', 'curvature'.
+        """
         # Data extraction from dictionary
         vertices = data["vertices"].astype(np.float32)
         vertex_normals = data["normals"].astype(np.float32)
@@ -62,6 +101,12 @@ class BrainRenderer:
         self.curvature_stored = curvature
 
     def update_colors(self, new_colors):
+        """
+        Dynamically update vertex colors (e.g., for time-series animation).
+
+        Args:
+            new_colors (np.ndarray): New RGB colors for all vertices. Shape (N, 3).
+        """
         # new_colors: (N, 3)
         # Re-interleave data
         # Pos(3) + Norm(3) + Color(3) + Curve(1)
@@ -69,6 +114,7 @@ class BrainRenderer:
         self.device.queue.write_buffer(self.vbo, 0, vertex_data)
 
     def _init_pipeline(self):
+        """Initialize Bind Groups and Pipeline Layout."""
         self.bind_group_layout = self.device.create_bind_group_layout(entries=[
             {"binding": 0, "visibility": wgpu.ShaderStage.VERTEX | wgpu.ShaderStage.FRAGMENT, "buffer": {"type": "uniform"}}
         ])
@@ -88,6 +134,14 @@ class BrainRenderer:
         self._create_pipelines(self.current_format)
 
     def _create_pipelines(self, target_format):
+        """
+        Create the 4 distinct rendering pipelines required for the hollow shell technique.
+        
+        Strategy: Draw Farthest Back Surface + Closest Front Surface to hide internal mesh structures.
+        
+        Args:
+            target_format (wgpu.TextureFormat): The output swap chain format (usually bgra8unorm).
+        """
         # We don't have texture bind group anymore (only uniforms)
         
         common_vertex = {
@@ -187,9 +241,22 @@ class BrainRenderer:
         return self.pipe_front_color
 
     def draw(self, target_texture_view, aspect_ratio, view_matrix, camera_pos=None):
-        if target_texture_view.texture.format != self.current_format:
-            self.current_format = target_texture_view.texture.format
-            self._create_pipelines(self.current_format)
+        """
+        Execute the 4-pass render cycle to draw the brain.
+
+        Passes:
+        1. Back Depth: Write depth of farthest back faces.
+        2. Back Color: Render farthest back faces where depth matches.
+        3. Front Depth: Write depth of closest front faces.
+        4. Front Color: Render closest front faces where depth matches.
+
+        Args:
+            target_texture_view (wgpu.GPUTextureView): Output color attachment.
+            aspect_ratio (float): Screen aspect ratio for projection matrix.
+            view_matrix (np.ndarray): 4x4 Camera View Matrix.
+            camera_pos (np.ndarray, optional): Camera world position for lighting calc.
+        """
+
 
         # Update Uniforms
         projection = pyrr.matrix44.create_perspective_projection_matrix(45, aspect_ratio, 0.1, 1000.0)

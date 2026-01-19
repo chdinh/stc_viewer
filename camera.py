@@ -2,7 +2,31 @@ import numpy as np
 import pyrr
 
 class Camera:
+    """
+    Handles 3D camera logic for the viewer, including orbit, pan, and zoom controls.
+
+    This class maintains the camera's state (position, target, orientation) and provides
+    methods to calculate the view matrix and handle user input events from `wgpu`.
+
+    Attributes:
+        canvas (WgpuCanvas): The canvas instance to request redraws from.
+        target (np.ndarray): The 3D point the camera is looking at. Shape (3,).
+        distance (float): Distance of the camera eye from the target.
+        azimuth (float): Horizontal orbital rotation in radians.
+        elevation (float): Vertical orbital rotation in radians.
+        position (np.ndarray): Current world position of the camera eye. Shape (3,).
+        _dragging_left (bool): State flag for left mouse button drag.
+        _dragging_right (bool): State flag for right mouse button drag.
+        _input_state (dict): Stores previous mouse position for delta calculation.
+    """
+
     def __init__(self, canvas=None):
+        """
+        Initialize the Camera with default viewing parameters.
+
+        Args:
+            canvas (WgpuCanvas, optional): Canvas for triggering redraws. Defaults to None.
+        """
         self.canvas = canvas
         
         # State
@@ -10,6 +34,7 @@ class Camera:
         self.distance = 5.0
         self.azimuth = 0.0   # Horizontal rotation
         self.elevation = 0.5 # Vertical rotation (radians)
+        self.position = np.array([0.0, 0.0, 5.0], dtype=np.float32)
         
         # Interaction state
         self._dragging_left = False
@@ -17,6 +42,15 @@ class Camera:
         self._input_state = {"last_pos": None}
         
     def get_view_matrix(self):
+        """
+        Calculate and return the 4x4 view matrix based on current spherical coordinates.
+
+        The camera position is calculated using spherical coordinates (r, theta, phi)
+        centered at `self.target`. The up vector is fixed to +Z.
+
+        Returns:
+            np.ndarray: A 4x4 flattened view matrix (column-major order expected by WebGPU).
+        """
         # Calculate eye position from spherical coordinates (Z-up)
         # x = r * cos(el) * cos(az)
         # y = r * cos(el) * sin(az)
@@ -36,7 +70,18 @@ class Camera:
         )
 
     def handle_event(self, event):
-        """Handle wgpu gui events."""
+        """
+        Process user input events to update camera state.
+
+        Handles:
+            - 'pointer_down': Start dragging (left=orbit, right=pan).
+            - 'pointer_up': Stop dragging.
+            - 'pointer_move': Update azimuth/elevation (orbit) or target (pan).
+            - 'wheel': Adjust distance (zoom).
+
+        Args:
+            event (dict): Event dictionary containing 'event_type', 'x', 'y', 'button', 'dy'.
+        """
         event_type = event["event_type"]
         
         if event_type == "pointer_down":

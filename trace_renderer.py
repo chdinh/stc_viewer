@@ -2,7 +2,30 @@ import wgpu
 import numpy as np
 
 class TraceRenderer:
+    """
+    Renders 2D time-series traces (butterfly plots) using WebGPU.
+
+    Visualizes the signal activity of selected brain clusters. The traces are rendered
+    as line strips against a basic coordinate system.
+
+    Attributes:
+        device (wgpu.GPUDevice): The WebGPU device used for rendering.
+        render_format (wgpu.TextureFormat): The color attachment format (e.g., bgra8unorm).
+        traces (list): List of 1D numpy arrays containing signal data [0..1].
+        pipeline (wgpu.RenderPipeline): The configured rendering pipeline for lines.
+        vbo (wgpu.GPUBuffer): Vertex Buffer Object storing line segments and axes.
+        vertex_count (int): Number of vertices to draw.
+        shader (wgpu.GPUShaderModule): The shader module for 2D line rendering.
+    """
+
     def __init__(self, device, render_format):
+        """
+        Initialize the TraceRenderer.
+
+        Args:
+            device (wgpu.GPUDevice): WebGPU device context.
+            render_format (wgpu.TextureFormat): Output texture format.
+        """
         self.device = device
         self.render_format = render_format
         self.traces = []
@@ -48,6 +71,7 @@ class TraceRenderer:
         self._create_pipeline()
         
     def _create_pipeline(self):
+        """Configure the WebGPU render pipeline for 2D line drawing."""
         self.pipeline = self.device.create_render_pipeline(
             layout="auto",
             vertex={
@@ -88,6 +112,12 @@ class TraceRenderer:
         )
         
     def set_data(self, traces):
+        """
+        Update the trace data and rebuild the vertex buffer.
+
+        Args:
+            traces (list): A list of 1D numpy arrays (float32) representing the signal over time.
+        """
         # Traces: List of np.arrays (frames,) containing signal [0..1]
         self.traces = traces
         if not traces:
@@ -140,8 +170,21 @@ class TraceRenderer:
 
 
     def draw(self, target_view, frame_idx):
+        """
+        Execute the draw call for the trace overlay.
+
+        Args:
+            target_view (wgpu.GPUTextureView): The view to render into (usually the canvas current texture).
+            frame_idx (int): The current animation frame index for cursor positioning.
+        """
         if not self.vbo or self.vertex_count == 0:
             return
+
+        # Dynamic Format Adaptation
+        if target_view.texture.format != self.render_format:
+            print(f"TraceRenderer: Format changed from {self.render_format} to {target_view.texture.format}. Recreating pipeline.")
+            self.render_format = target_view.texture.format
+            self._create_pipeline()
             
         # Update Cursor Logic
         if self.n_frames > 1:

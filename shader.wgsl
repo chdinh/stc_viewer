@@ -1,23 +1,39 @@
+/*
+    Core WGSL Shader
+    
+    This shader implements the rendering logic for the brain surface visualization.
+    It supports two distinct rendering modes based on vertex saturation:
+    1. "Shell": The base brain (low saturation), rendered as transparent blue glass.
+    2. "Data": Activated regions (high saturation), rendered as emissive, electric holographic plasma.
+    
+    Lighting Model:
+    - Ambient Occlusion (based on curvature)
+    - Diffuse (Lambert)
+    - Specular (Phong)
+    - Rim Lighting (Fresnel)
+    - Emissive (Core intensity)
+*/
+
 struct VertexInput {
-    @location(0) position: vec3<f32>,
-    @location(1) normal: vec3<f32>,
-    @location(2) color: vec3<f32>,
-    @location(3) curvature: f32,
+    @location(0) position: vec3<f32>,  // Model Space Position
+    @location(1) normal: vec3<f32>,    // Model Space Normal
+    @location(2) color: vec3<f32>,     // Per-vertex Color (activations encoded here)
+    @location(3) curvature: f32,       // Normalized Curvature [0..1]
 };
 
 struct VertexOutput {
-    @builtin(position) @invariant position: vec4<f32>,
-    @location(0) normal_world: vec3<f32>,
-    @location(1) view_dir: vec3<f32>,
-    @location(2) color: vec3<f32>,
-    @location(3) curvature: f32,
+    @builtin(position) @invariant position: vec4<f32>, // Clip Space Position
+    @location(0) normal_world: vec3<f32>,              // Interpolated World Normal
+    @location(1) view_dir: vec3<f32>,                  // View Direction vector
+    @location(2) color: vec3<f32>,                     // Pass-through interpolated color
+    @location(3) curvature: f32,                       // Pass-through curvature
 };
 
 struct Uniforms {
-    model_view_projection: mat4x4<f32>,
-    model: mat4x4<f32>,
-    camera_pos: vec4<f32>, // .xyz used
-    light_dir: vec4<f32>,  // .xyz used (World Space)
+    model_view_projection: mat4x4<f32>, // MVP Matrix
+    model: mat4x4<f32>,                 // Model Matrix
+    camera_pos: vec4<f32>,              // Camera World Position (.xyz)
+    light_dir: vec4<f32>,               // Light Direction Normalized (.xyz)
 };
 
 @group(0) @binding(0)
