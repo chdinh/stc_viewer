@@ -5,31 +5,10 @@ import os
 import subprocess
 import nibabel as nib
 
-def ensure_destrieux_downloaded():
-    """Manual download using curl to bypass Python SSL issues."""
-    data_dir = os.path.expanduser("~/nilearn_data/destrieux_surface")
-    if not os.path.exists(data_dir):
-        os.makedirs(data_dir)
-    
-    files = {
-        "lh.aparc.a2009s.annot": "https://www.nitrc.org/frs/download.php/9343/lh.aparc.a2009s.annot",
-        "rh.aparc.a2009s.annot": "https://www.nitrc.org/frs/download.php/9342/rh.aparc.a2009s.annot"
-    }
-    
-    for filename, url in files.items():
-        filepath = os.path.join(data_dir, filename)
-        if os.path.exists(filepath):
-            size = os.path.getsize(filepath)
-            if size < 50 * 1024 or size > 500 * 1024:
-                os.remove(filepath)
 
-        if not os.path.exists(filepath):
-            try:
-                subprocess.run(["curl", "-k", "-L", "-o", filepath, url], check=True)
-            except subprocess.CalledProcessError:
-                pass # Already printed in earlier attempts
 
-def _load_hemisphere(mesh_path, annot_path, label_colors):
+
+def _load_hemisphere(mesh_path, labels, label_colors):
     print(f"Loading mesh from {mesh_path}...")
     if mesh_path.endswith('.gii') or mesh_path.endswith('.gii.gz'):
         gii = nib.load(mesh_path)
@@ -41,7 +20,8 @@ def _load_hemisphere(mesh_path, annot_path, label_colors):
     faces = faces.astype(np.uint32)
     coords = coords.astype(np.float32)
     
-    labels, ctab, names = nib.freesurfer.read_annot(annot_path)
+    # labels is now passed in directly (numpy array)
+    # labels, ctab, names = nib.freesurfer.read_annot(annot_path)
     
     # -------------------------------------------------------------
     # SIMULATION: Temporal Source Dynamics
@@ -49,9 +29,11 @@ def _load_hemisphere(mesh_path, annot_path, label_colors):
     n_frames = 200
     time_series = np.zeros((len(labels), n_frames), dtype=np.float32)
     
-    # Base Noise
-    noise = np.random.normal(0.0, 0.05, (len(labels), n_frames))
-    time_series += noise
+    # Base Noise: REMOVED to prevent stray activations (glitches)
+    # The shader is very sensitive (threshold 0.05 saturation).
+    # Standard noise (std=0.05) was causing ~10% of vertices to glow.
+    # noise = np.random.normal(0.0, 0.05, (len(labels), n_frames))
+    # time_series += noise
     
     unique_labels = np.unique(labels)
     unique_labels = unique_labels[unique_labels > 0]
@@ -74,7 +56,8 @@ def _load_hemisphere(mesh_path, annot_path, label_colors):
         raw_traces.append(signal) # Store clean signal
         
         cluster_signal = np.tile(signal, (n_verts, 1))
-        cluster_signal += np.random.normal(0, 0.1, cluster_signal.shape)
+        # Add noise ONLY to active regions
+        cluster_signal += np.random.normal(0, 0.05, cluster_signal.shape)
         
         time_series[mask] = cluster_signal * 0.8 + 0.2
 
@@ -122,22 +105,59 @@ def _load_hemisphere(mesh_path, annot_path, label_colors):
     
     return vertices, faces, normals, vertex_colors, curvature, vertex_color_frames, atlas_colors, raw_traces
 
+def ensure_destrieux_downloaded():
+    """Manual download using curl to bypass Python SSL issues."""
+    data_dir = os.path.expanduser("~/nilearn_data/destrieux_surface")
+    if not os.path.exists(data_dir):
+        os.makedirs(data_dir)
+    
+    files = {
+        "lh.aparc.a2009s.annot": "https://www.nitrc.org/frs/download.php/9343/lh.aparc.a2009s.annot",
+        "rh.aparc.a2009s.annot": "https://www.nitrc.org/frs/download.php/9342/rh.aparc.a2009s.annot"
+    }
+    
+    for filename, url in files.items():
+        filepath = os.path.join(data_dir, filename)
+        # Check if file exists and has reasonable size (skipping if seems valid)
+        if os.path.exists(filepath):
+            size = os.path.getsize(filepath)
+            if size < 50 * 1024: # If too small, likely failed download
+                os.remove(filepath)
+
+        if not os.path.exists(filepath):
+            print(f"Downloading {filename} manually to bypass SSL...")
+            try:
+                subprocess.run(["curl", "-k", "-L", "-o", filepath, url], check=True)
+            except subprocess.CalledProcessError:
+                print(f"Failed to download {filename}")
+
 def load_brain_data():
     print("Fetching fsaverage5 surface...")
     fsaverage = datasets.fetch_surf_fsaverage("fsaverage5")
+    
+    # Pre-download annot files to avoid nilearn SSL error
     ensure_destrieux_downloaded()
     
     data_dir = os.path.expanduser("~/nilearn_data/destrieux_surface")
-    left_annot_path = f"{data_dir}/lh.aparc.a2009s.annot"
-    right_annot_path = f"{data_dir}/rh.aparc.a2009s.annot"
+    left_annot_path = os.path.join(data_dir, "lh.aparc.a2009s.annot")
+    right_annot_path = os.path.join(data_dir, "rh.aparc.a2009s.annot")
+    
+    def read_labels(path):
+        labels, ctab, names = nib.freesurfer.read_annot(path)
+        return labels.astype(np.int32)
+
+    map_left = read_labels(left_annot_path)
+    map_right = read_labels(right_annot_path)
     
     np.random.seed(42)
+    # Ensure color palette is large enough
     label_colors = np.random.uniform(0.2, 0.9, (200, 3))
     label_colors[0] = [0.5, 0.5, 0.5]
     
     # Load hemispheres
+    # Pass the loaded map (numpy array) directly
     v_l, f_l, n_l, c_l, curv_l, frames_l, atlas_l, traces_l = _load_hemisphere(
-        fsaverage.pial_left, left_annot_path, label_colors
+        fsaverage.pial_left, map_left, label_colors
     )
     
     if hasattr(fsaverage, 'pial_right'):
@@ -146,7 +166,7 @@ def load_brain_data():
         mesh_path_r = fsaverage.pial_left.replace("left", "right").replace("lh", "rh")
         
     v_r, f_r, n_r, c_r, curv_r, frames_r, atlas_r, traces_r = _load_hemisphere(
-        mesh_path_r, right_annot_path, label_colors
+        mesh_path_r, map_right, label_colors
     )
     
     print("Merging hemispheres...")

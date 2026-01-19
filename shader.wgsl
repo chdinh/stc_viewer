@@ -50,30 +50,30 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location
 
     let V = normalize(in.view_dir);
     
-    // --- COLOR PALETTE ---
-    // Target Deeper Blue (less Turquoise)
-    let deep_blue = vec3<f32>(0.2, 0.5, 1.0);
-    // Mix original data color with deep blue
-    let base_color = mix(in.color, deep_blue, 0.2); 
-
-    // --- 1. AMBIENT & CURVATURE ---
-    // Curvature: 0.0 (Concave/Sulci) -> 1.0 (Convex/Gyri)
-    let ao_strength = mix(0.1, 1.0, pow(in.curvature, 0.5)); 
-    
     // --- DATA DETECTION (Saturation) ---
     // Gray (Background) has ~0 saturation. Activations/Atlas are colorful.
     // We use this to separate "Shell" logic from "Data" logic.
     let gray_val = dot(in.color, vec3<f32>(0.299, 0.587, 0.114));
     let saturation = length(in.color - vec3<f32>(gray_val));
-    let is_data = smoothstep(0.05, 0.2, saturation); // 0.0 = Shell, 1.0 = Data
+    let is_data = smoothstep(0.05, 0.2, saturation); 
 
+    // --- COLOR PALETTE ---
+    // Shell: Turquoise Blue (Original)
+    let deep_blue = vec3<f32>(0.2, 0.5, 1.0);
+    // Data: Futuristic Electric Blue
+    let electric_blue = vec3<f32>(0.05, 0.15, 1.0);
+
+    // Mix Colors: Shell uses Turquoise, Data uses Electric Blue
+    let shell_base = mix(in.color, deep_blue, 0.2);
+    let data_base = mix(in.color, electric_blue, 0.5);
+    let base_color = mix(shell_base, data_base, is_data);
+
+    // --- 1. AMBIENT & CURVATURE ---
+    let ao_strength = mix(0.1, 1.0, pow(in.curvature, 0.5)); 
+    
     // --- 2. DIFFUSE ---
-    // User requested lighting fixed to camera (Top-Down relative to Camera)
     let L = normalize(uniforms.light_dir.xyz); 
     let diff = max(dot(N, L), 0.0);
-    
-    // Shell: Low diffuse (Transparent). Data: Near-zero (Gaseous).
-    // Not "Solid Plastic" (0.8), but "Gas" (0.05).
     let diff_strength = mix(0.15, 0.05, is_data);
     let diffuse_color = base_color * diff * ao_strength * diff_strength;
     
@@ -85,47 +85,49 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location
     let specular_color = vec3<f32>(1.0) * spec * spec_intensity;
     
     // --- 4. RIM LIGHT ---
-    let fresnel_power = 3.5; 
+    let fresnel_power = 3.0; 
     let fresnel = pow(1.0 - max(dot(N, V), 0.0), fresnel_power);
     
-    // Shell: Blue Rim. Data: "Electric Light" / "Plasma" Rim using its own color.
-    // Boost intensity for data to make it glow.
-    let data_rim = in.color * fresnel * 3.0; // Strong glow
+    // Shell Rim: Turquoise, softer
     let shell_rim = deep_blue * fresnel * 2.0;
+
+    // Data Rim: Electric Blue, sharper, brighter
+    // Use electric_blue for the halo instead of raw data color to unify the look
+    let data_rim_color = mix(in.color, electric_blue, 0.5);
+    // Super sharp and bright rim for "forcefield" effect
+    // Power 3.0 -> 5.0 (Thinner edge)
+    // Mult 5.0 -> 8.0 (Brighter edge)
+    let data_rim_fresnel = pow(1.0 - max(dot(N, V), 0.0), 5.0);
+    let data_rim = data_rim_color * data_rim_fresnel * 8.0; 
+
     let rim_color = mix(shell_rim, data_rim, is_data); 
     
-    // --- 5. EMISSIVE ---
-    // Shell: Edge Glow. Data: "Plasma" feel (White Hot Core + Blue Halo).
+    // --- 5. EMISSIVE & CORE ---
+    let N_dot_V = max(dot(N, V), 0.0);
     
-    // Calculate "Hot Core": Areas facing the camera (N.V ~ 1.0) are "deep" in the volume or center of the glow.
-    // Or we can use Specular logic for the "Hotspot".
-    // Let's add a "Core Glow" that is White.
-    let core_intensity = pow(max(dot(N, V), 0.0), 2.0); // Facing camera
-    
-    // Data Emission:
-    // Base: Atomic Blue (in.color)
-    // Edge: Electric Fresnel
-    // Core: White Hot mix
-    let data_base_glow = in.color * 0.5;
-    let data_edge_glow = in.color * fresnel * 2.0;
-    
-    // Mix white into the core
-    let data_hot_core = vec3<f32>(1.0) * core_intensity * 0.8;
-    
-    let data_emit = data_base_glow + data_edge_glow + data_hot_core;
-    
+    // Shell Emission: Edge Glow only
     let shell_emit = deep_blue * fresnel * 0.4;
+
+    // Data Emission: White Hot Core + Electric Body
+    let core_metric = pow(N_dot_V, 3.0); 
+    let data_core_color = mix(data_base, vec3<f32>(1.0), core_metric); // White center
+    let data_emit = data_core_color * (0.8 + core_metric * 4.0); // High intensity
+
     let emissive = mix(shell_emit, data_emit, is_data);
 
     // --- COMBINE ---
     let final_color = diffuse_color + specular_color + rim_color + emissive;
     
     // --- ALPHA / TRANSPARENCY ---
-    // Shell: Transparent (0.1). Data: "Transparent Plasma" (0.4).
-    // Not Opaque (0.9) as before.
-    let alpha_center = mix(0.1, 0.4, is_data); 
-    let alpha_edge = 0.95;
-    let alpha = clamp(alpha_center + (alpha_edge - alpha_center) * fresnel, 0.0, 1.0);
+    // Shell: Original logic (Transparent center, opaque rim)
+    let alpha_shell = clamp(0.1 + 0.85 * fresnel, 0.0, 1.0);
     
-    return vec4<f32>(final_color, alpha);
+    // Data: Holographic (Transparent body, Opaque Core)
+    // Reduce edge alpha (for hologram feel), Increase core alpha (for white light)
+    // Max alpha 0.6 to keep it "ghostly" / "holographic" even at center
+    let alpha_data = clamp(0.1 + 0.5 * core_metric, 0.0, 0.6); 
+    
+    let final_alpha = mix(alpha_shell, alpha_data, is_data);
+    
+    return vec4<f32>(final_color, final_alpha);
 }
